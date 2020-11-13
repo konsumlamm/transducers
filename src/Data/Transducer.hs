@@ -19,6 +19,7 @@ module Data.Transducer
     -- * Transducers
     , transduce
     , mapping, filtering, concatMapping, taking, takingWhile, dropping, droppingWhile
+    , prescanning, postscanning
     ) where
 
 import Prelude hiding (init, pred)
@@ -192,3 +193,25 @@ droppingWhile pred (Reducer init step complete) = Reducer init' step' complete'
     step' (_, r) x = fmap ((,) True) (step r x)
     complete' (_, r) = complete r
 {-# INLINE droppingWhile #-}
+
+postscanning :: Reducer a b -> Transducer a b
+postscanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reducer init' step' complete'
+  where
+    init' = (init0, init)
+    step' (r0, r) x =
+        let Reduced flag0 r0' = step0 r0 x
+            Reduced flag r' = step r (complete0 r0')
+        in Reduced (flag0 || flag) (r0', r')
+    complete' (_, r) = complete r
+{-# INLINE postscanning #-}
+
+prescanning :: Reducer a b -> Transducer a b
+prescanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reducer init' step' complete'
+  where
+    init' = (init0, init)
+    step' (r0, r) x =
+        let Reduced flag0 r0' = step0 r0 x
+            Reduced flag r' = step r (complete0 r0)
+        in Reduced (flag0 || flag) (r0', r')
+    complete' (_, r) = complete r
+{-# INLINE prescanning #-}
