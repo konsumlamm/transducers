@@ -14,11 +14,15 @@ module Data.Transducer
     , intoNull
     , intoSum, intoProduct
     , intoFirst, intoLast
-    , intoAll, intoAny
+    , intoAnd, intoOr
     , intoMin, intoMax
     -- * Transducers
     , transduce
-    , mapping, filtering, concatMapping, taking, takingWhile, dropping, droppingWhile
+    , mapping
+    , filtering
+    , concatMapping
+    , taking, takingWhile
+    , dropping, droppingWhile
     , prescanning, postscanning
     ) where
 
@@ -114,11 +118,11 @@ intoFirst = Reducer Nothing step id
 intoLast :: Reducer a (Maybe a)
 intoLast = reducer' Nothing (const Just) id
 
-intoAll :: Reducer Bool Bool
-intoAll = reducer' True (&&) id
+intoAnd :: Reducer Bool Bool
+intoAnd = reducer' True (&&) id
 
-intoAny :: Reducer Bool Bool
-intoAny = reducer' False (||) id
+intoOr :: Reducer Bool Bool
+intoOr = reducer' False (||) id
 
 intoMin :: Ord a => Reducer a (Maybe a)
 intoMin = reducer' Nothing step id

@@ -1,8 +1,10 @@
 name:                transducers
 version:             0.1.0.0
 synopsis:            Transducers for Haskell
--- description:
+description:
+  This package provides transducers for Haskell (inspired by Clojure).
 homepage:            https://github.com/konsumlamm/transducers#readme
+bug-reports:         https://github.com/konsumlamm/transducers/issues
 license:             BSD3
 license-file:        LICENSE
 author:              konsumlamm
