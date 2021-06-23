@@ -5,7 +5,7 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck
 
-import Data.Transducer
+import Transducers
 
 default (Int)
 

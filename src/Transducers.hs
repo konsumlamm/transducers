@@ -3,7 +3,7 @@
 
 -- | For a good explanation, see [here](https://hypirion.com/musings/haskell-transducers).
 
-module Data.Transducer
+module Transducers
     ( Reduced(Reduced), continue, reduced, getReduced
     , Reducer(Reducer), reducer'
     , Transducer
@@ -84,7 +84,7 @@ instance Applicative (Reducer a) where
 
 -- reducers
 
-reduce :: Foldable t => Reducer a b -> t a -> b
+reduce :: (Foldable t) => Reducer a b -> t a -> b
 reduce (Reducer init step complete) xs = complete $ getReduced (foldr c continue xs init)
   where
     c x k r =
@@ -104,10 +104,10 @@ intoList = reducer' id (\x a -> x . (a :)) ($ [])
 intoRevList :: Reducer a [a]
 intoRevList = reducer' [] (flip (:)) id
 
-intoSum :: Num a => Reducer a a
+intoSum :: (Num a) => Reducer a a
 intoSum = reducer' 0 (+) id
 
-intoProduct :: Num a => Reducer a a
+intoProduct :: (Num a) => Reducer a a
 intoProduct = reducer' 1 (*) id
 
 intoFirst :: Reducer a (Maybe a)
@@ -124,13 +124,13 @@ intoAnd = reducer' True (&&) id
 intoOr :: Reducer Bool Bool
 intoOr = reducer' False (||) id
 
-intoMin :: Ord a => Reducer a (Maybe a)
+intoMin :: (Ord a) => Reducer a (Maybe a)
 intoMin = reducer' Nothing step id
   where
     step Nothing x = Just x
     step (Just x) y = Just (min x y)
 
-intoMax :: Ord a => Reducer a (Maybe a)
+intoMax :: (Ord a) => Reducer a (Maybe a)
 intoMax = reducer' Nothing step id
   where
     step Nothing x = Just x
@@ -138,7 +138,7 @@ intoMax = reducer' Nothing step id
 
 -- transducers
 
-transduce :: Foldable t => Transducer a b -> Reducer b c -> t a -> c
+transduce :: (Foldable t) => Transducer a b -> Reducer b c -> t a -> c
 transduce transducer reducer = reduce (transducer reducer)
 {-# INLINE transduce #-}
 
@@ -154,7 +154,7 @@ filtering pred (Reducer init step complete) = Reducer init step' complete
     step' r x = if pred x then step r x else continue r
 {-# INLINE filtering #-}
 
-concatMapping :: Foldable t => (a -> t b) -> Transducer a b
+concatMapping :: (Foldable t) => (a -> t b) -> Transducer a b
 concatMapping f (Reducer init step complete) = Reducer init step' complete
   where
     step' r x = continue $ reduce (Reducer r step id) (f x)
