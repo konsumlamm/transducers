@@ -2,18 +2,22 @@ name:                transducers
 version:             0.1.0.0
 synopsis:            Transducers for Haskell
 description:
-  This package provides transducers for Haskell (inspired by Clojure).
+  This package provides transducers for Haskell, inspired by Clojure.
 homepage:            https://github.com/konsumlamm/transducers#readme
 bug-reports:         https://github.com/konsumlamm/transducers/issues
 license:             BSD3
 license-file:        LICENSE
 author:              konsumlamm
 maintainer:          konsumlamm@gmail.com
-copyright:           2020 konsumlamm
+copyright:           2020-2021 konsumlamm
 category:            Data
 build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >= 1.10
+
+source-repository head
+  type:     git
+  location: https://github.com/konsumlamm/transducers
 
 library
   hs-source-dirs:      src
@@ -30,7 +34,3 @@ test-suite test
   build-depends:       base >= 4.7 && < 5, hspec, QuickCheck, transducers
   ghc-options:         -Wall -Wno-type-defaults
   default-language:    Haskell2010
-
-source-repository head
-  type:     git
-  location: https://github.com/konsumlamm/transducers

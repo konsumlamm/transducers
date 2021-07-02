@@ -45,8 +45,12 @@ main = hspec $ do
         prop "intoLast" $ prop_reducer intoLast lastMaybe
         prop "intoAnd" $ prop_reducer intoAnd and
         prop "intoOr" $ prop_reducer intoOr or
-        prop "intoMin" $ prop_reducer intoMin minimumMaybe
-        prop "intoMax" $ prop_reducer intoMax maximumMaybe
+        prop "intoAll" $ \(Fn f) -> prop_reducer (intoAll f) (all f)
+        prop "intoAny" $ \(Fn f) -> prop_reducer (intoAny f) (any f)
+        prop "intoMinimum" $ prop_reducer intoMinimum minimumMaybe
+        prop "intoMaximum" $ prop_reducer intoMaximum maximumMaybe
+        prop "intoMinimumBy" $ prop_reducer (intoMinimumBy compare) minimumMaybe
+        prop "intoMaximumBy" $ prop_reducer (intoMaximumBy compare) maximumMaybe
 
     describe "transducers" $ do
         prop "mapping" $ \(Fn f) -> prop_transducer (mapping f) (map f)

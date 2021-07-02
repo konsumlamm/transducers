@@ -1,11 +1,18 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
 
--- | For a good explanation, see [here](https://hypirion.com/musings/haskell-transducers).
+{- |
+Transducers are composable algorithmic transformations.
+
+= See also
+
+* https://clojure.org/reference/transducers
+* https://hypirion.com/musings/haskell-transducers
+-}
 
 module Transducers
     ( Reduced(Reduced), continue, reduced, getReduced
-    , Reducer(Reducer), reducer'
+    , Reducer(..), reducer, reducer_
     , Transducer
     -- * Reducers
     , reduce
@@ -15,7 +22,9 @@ module Transducers
     , intoSum, intoProduct
     , intoFirst, intoLast
     , intoAnd, intoOr
-    , intoMin, intoMax
+    , intoAll, intoAny
+    , intoMinimum, intoMaximum
+    , intoMinimumBy, intoMaximumBy
     -- * Transducers
     , transduce
     , mapping
@@ -26,20 +35,24 @@ module Transducers
     , prescanning, postscanning
     ) where
 
+import Control.Applicative (liftA2)
 import Prelude hiding (init, pred)
+
+-- TODO: indexing related stuff (elemIndex, enumerating, ...)?
+-- TODO: elem, find, index?
 
 -- types
 
 data Reduced a = Reduced { _flag :: !Bool, getReduced :: !a }
 
+-- TODO: different name?
 continue :: a -> Reduced a
 continue = Reduced False
-{-# INLINE continue #-}
 
 reduced :: a -> Reduced a
 reduced = Reduced True
-{-# INLINE reduced #-}
 
+-- FIXME: unlawful instance? :(
 instance Functor Reduced where
     fmap f (Reduced flag x) = Reduced flag (f x)
 
@@ -49,23 +62,24 @@ data Reducer a b = forall r. Reducer
     , _complete :: r -> b
     }
 
-reducer' :: r -> (r -> a -> r) -> (r -> b) -> Reducer a b
-reducer' init step complete = Reducer init step' complete
-  where
-    step' r x = continue (step r x)
-{-# INLINE reducer' #-}
+-- TODO: rename?
+-- TODO: variant where _complete is id?
+
+reducer :: r -> (r -> a -> Reduced r) -> (r -> b) -> Reducer a b
+reducer = Reducer
+
+reducer_ :: r -> (r -> a -> r) -> (r -> b) -> Reducer a b
+reducer_ init step complete = Reducer init (\r x -> continue (step r x)) complete
 
 type Transducer a b = forall r. Reducer b r -> Reducer a r
 
 instance Functor (Reducer a) where
-    fmap f (Reducer init step complete) = Reducer init step complete'
-      where
-        complete' x = f $! complete x
+    fmap f (Reducer init step complete) = Reducer init step (f . complete)
 
 instance Applicative (Reducer a) where
     pure x = Reducer () (\() _ -> reduced ()) (\() -> x)
 
-    Reducer initL stepL completeL <*> Reducer initR stepR completeR = Reducer init step complete
+    liftA2 f (Reducer initL stepL completeL) (Reducer initR stepR completeR) = Reducer init step complete
       where
         init = (continue initL, continue initR)
         step (l@(Reduced flagL xL), r@(Reduced flagR xR)) x
@@ -79,68 +93,87 @@ instance Applicative (Reducer a) where
                 let l'@(Reduced flagL' _) = stepL xL x
                     r'@(Reduced flagR' _) = stepR xR x
                 in Reduced (flagL' && flagR') (l', r')
-        complete (l, r) = completeL (getReduced l) $ completeR (getReduced r)
-    {-# INLINE (<*>) #-}
+        complete (l, r) = f (completeL (getReduced l)) (completeR (getReduced r))
 
 -- reducers
 
 reduce :: (Foldable t) => Reducer a b -> t a -> b
-reduce (Reducer init step complete) xs = complete $ getReduced (foldr c continue xs init)
+reduce (Reducer init step complete) xs = foldr c complete xs init
   where
     c x k r =
-        let r'@(Reduced flag x') = step r x
-        in if flag then r' else k $! x'
-{-# INLINE reduce #-}
+        let Reduced flag x' = step r x
+        in if flag then complete x' else k $! x'
 
 intoLength :: Reducer a Int
-intoLength = reducer' 0 (\x _ -> x + 1) id
+intoLength = reducer_ 0 (\x _ -> x + 1) id
 
 intoNull :: Reducer a Bool
 intoNull = Reducer True (\_ _ -> reduced False) id
 
 intoList :: Reducer a [a]
-intoList = reducer' id (\x a -> x . (a :)) ($ [])
+intoList = reducer_ id (\x a -> x . (a :)) ($ [])
 
 intoRevList :: Reducer a [a]
-intoRevList = reducer' [] (flip (:)) id
+intoRevList = reducer_ [] (flip (:)) id
 
 intoSum :: (Num a) => Reducer a a
-intoSum = reducer' 0 (+) id
+intoSum = reducer_ 0 (+) id
 
 intoProduct :: (Num a) => Reducer a a
-intoProduct = reducer' 1 (*) id
+intoProduct = reducer_ 1 (*) id
 
 intoFirst :: Reducer a (Maybe a)
-intoFirst = Reducer Nothing step id
-  where
-    step _ x = reduced (Just x)
+intoFirst = Reducer Nothing (\_ x -> reduced (Just x)) id
 
 intoLast :: Reducer a (Maybe a)
-intoLast = reducer' Nothing (const Just) id
+intoLast = reducer_ Nothing (const Just) id
 
 intoAnd :: Reducer Bool Bool
-intoAnd = reducer' True (&&) id
+intoAnd = Reducer True (\r x -> if x then continue r else reduced x) id
 
 intoOr :: Reducer Bool Bool
-intoOr = reducer' False (||) id
+intoOr = Reducer False (\r x -> if x then reduced x else continue r) id
 
-intoMin :: (Ord a) => Reducer a (Maybe a)
-intoMin = reducer' Nothing step id
+intoAll :: (a -> Bool) -> Reducer a Bool
+intoAll pred = mapping pred intoAnd
+
+intoAny :: (a -> Bool) -> Reducer a Bool
+intoAny pred = mapping pred intoOr
+
+intoMinimum :: (Ord a) => Reducer a (Maybe a)
+intoMinimum = reducer_ Nothing step id
   where
-    step Nothing x = Just x
+    step Nothing y = Just y
     step (Just x) y = Just (min x y)
 
-intoMax :: (Ord a) => Reducer a (Maybe a)
-intoMax = reducer' Nothing step id
+intoMaximum :: (Ord a) => Reducer a (Maybe a)
+intoMaximum = reducer_ Nothing step id
+  where
+    step Nothing y = Just y
+    step (Just x) y = Just (max x y)
+
+intoMinimumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
+intoMinimumBy cmp = reducer_ Nothing step id
   where
     step Nothing x = Just x
-    step (Just x) y = Just (max x y)
+    step (Just x) y = Just $ case x `cmp` y of
+        GT -> y
+        _ -> x
+
+intoMaximumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
+intoMaximumBy cmp = reducer_ Nothing step id
+  where
+    step Nothing x = Just x
+    step (Just x) y = Just $ case x `cmp` y of
+        LT -> y
+        _ -> x
 
 -- transducers
 
+-- TODO: simplify transducers using state & possibly use a strict tuple
+
 transduce :: (Foldable t) => Transducer a b -> Reducer b c -> t a -> c
 transduce transducer reducer = reduce (transducer reducer)
-{-# INLINE transduce #-}
 
 mapping :: (a -> b) -> Transducer a b
 mapping f (Reducer init step complete) = Reducer init step' complete
