@@ -1,5 +1,9 @@
 {-# LANGUAGE ExtendedDefaultRules #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
+import Data.Foldable (foldl', traverse_)
+import Data.Monoid (Sum(..))
 
 import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
@@ -51,6 +55,11 @@ main = hspec $ do
         prop "intoMaximum" $ prop_reducer intoMaximum maximumMaybe
         prop "intoMinimumBy" $ prop_reducer (intoMinimumBy compare) minimumMaybe
         prop "intoMaximumBy" $ prop_reducer (intoMaximumBy compare) maximumMaybe
+        prop "intoMonoid" $ prop_reducer intoMonoid (mconcat :: [[Int]] -> [Int]) -- use Monoid [Int]
+        prop "intoFoldMap" $ prop_reducer (intoFoldMap Sum getSum) (getSum . foldMap Sum) -- use Monoid (Sum Int)
+        prop "intoFold" $ prop_reducer (intoFold (+) 0) (foldl' (+) 0)
+        prop "intoFold1" $ \(NonEmpty ls) -> reduce (intoFold1 (+)) ls === foldl1 (+) ls
+        prop "intoFor_" $ \(Fn (f :: Int -> Maybe Int)) -> prop_reducer (intoFor_ f) (traverse_ f) -- use Applicative Maybe
 
     describe "transducers" $ do
         prop "mapping" $ \(Fn f) -> prop_transducer (mapping f) (map f)
@@ -60,5 +69,6 @@ main = hspec $ do
         prop "takingWhile" $ \(Fn f) -> prop_transducer (takingWhile f) (takeWhile f)
         prop "dropping" $ \n -> prop_transducer (dropping n) (drop n)
         prop "droppingWhile" $ \(Fn f) -> prop_transducer (droppingWhile f) (dropWhile f)
+        prop "enumerating" $ prop_transducer enumerating (zip [0..])
         prop "postscanning" $ prop_transducer (postscanning intoSum) (tail . scanl (+) 0)
         prop "prescanning" $ prop_transducer (prescanning intoSum) (init . scanl (+) 0)

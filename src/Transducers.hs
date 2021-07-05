@@ -23,10 +23,12 @@ module Transducers
     , intoList, intoRevList
     , intoLength
     , intoNull
+    , intoElem
     , intoSum, intoProduct
     , intoFirst, intoLast
     , intoAnd, intoOr
     , intoAll, intoAny
+    , intoFind, intoFindIndex
     , intoMinimum, intoMaximum
     , intoMinimumBy, intoMaximumBy
     , intoMonoid, intoFoldMap
@@ -38,6 +40,7 @@ module Transducers
     , concatMapping
     , taking, takingWhile
     , dropping, droppingWhile
+    , enumerating
     , prescanning, postscanning
     ) where
 
@@ -45,21 +48,16 @@ import Control.Applicative (liftA2)
 import Data.Maybe (fromMaybe)
 import Prelude hiding (init, pred)
 
--- TODO: indexing related stuff (elemIndex, enumerating, ...)?
--- TODO: elem, find, index?
-
 -- types
 
-data Reduced a = Reduced { _flag :: !Bool, getReduced :: !a }
+data Reduced a = Reduced { _flag :: !Bool, getReduced :: a }
 
--- TODO: different name?
 continue :: a -> Reduced a
 continue = Reduced False
 
 reduced :: a -> Reduced a
 reduced = Reduced True
 
--- FIXME: unlawful instance? :(
 instance Functor Reduced where
     fmap f (Reduced flag x) = Reduced flag (f x)
 
@@ -70,7 +68,6 @@ data Reducer a b = forall s. Reducer
     }
 
 -- TODO: rename?
--- TODO: variant where _complete is id?
 
 reducer :: s -> (s -> a -> Reduced s) -> (s -> b) -> Reducer a b
 reducer = Reducer
@@ -117,28 +114,31 @@ transduce trans red = reduce (trans red)
 -- reducers
 
 intoLength :: Reducer a Int
-intoLength = reducer_ 0 (\x _ -> x + 1) id
+intoLength = intoFold (\x _ -> x + 1) 0
 
 intoNull :: Reducer a Bool
 intoNull = Reducer True (\_ _ -> reduced False) id
+
+intoElem :: (Eq a) => a -> Reducer a Bool
+intoElem x = intoAny (== x)
 
 intoList :: Reducer a [a]
 intoList = reducer_ id (\acc x -> acc . (x :)) ($ [])
 
 intoRevList :: Reducer a [a]
-intoRevList = reducer_ [] (flip (:)) id
+intoRevList = intoFold (flip (:)) []
 
 intoSum :: (Num a) => Reducer a a
-intoSum = reducer_ 0 (+) id
+intoSum = intoFold (+) 0
 
 intoProduct :: (Num a) => Reducer a a
-intoProduct = reducer_ 1 (*) id
+intoProduct = intoFold (*) 1
 
 intoFirst :: Reducer a (Maybe a)
 intoFirst = Reducer Nothing (\_ x -> reduced (Just x)) id
 
 intoLast :: Reducer a (Maybe a)
-intoLast = reducer_ Nothing (const Just) id
+intoLast = intoFold (const Just) Nothing
 
 intoAnd :: Reducer Bool Bool
 intoAnd = Reducer True (\acc x -> if x then continue acc else reduced x) id
@@ -152,36 +152,42 @@ intoAll pred = mapping pred intoAnd
 intoAny :: (a -> Bool) -> Reducer a Bool
 intoAny pred = mapping pred intoOr
 
+intoFind :: (a -> Bool) -> Reducer a (Maybe a)
+intoFind pred = filtering pred intoFirst
+
+intoFindIndex :: (a -> Bool) -> Reducer a (Maybe Int)
+intoFindIndex pred = enumerating . filtering (\(_, x) -> pred x) . mapping fst $ intoFirst
+
 intoMinimum :: (Ord a) => Reducer a (Maybe a)
-intoMinimum = reducer_ Nothing step id
+intoMinimum = intoFold f Nothing
   where
-    step Nothing y = Just y
-    step (Just x) y = Just (min x y)
+    f Nothing y = Just y
+    f (Just x) y = Just (min x y)
 
 intoMaximum :: (Ord a) => Reducer a (Maybe a)
-intoMaximum = reducer_ Nothing step id
+intoMaximum = intoFold f Nothing
   where
-    step Nothing y = Just y
-    step (Just x) y = Just (max x y)
+    f Nothing y = Just y
+    f (Just x) y = Just (max x y)
 
 intoMinimumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
-intoMinimumBy cmp = reducer_ Nothing step id
+intoMinimumBy cmp = intoFold f Nothing
   where
-    step Nothing x = Just x
-    step (Just x) y = Just $ case x `cmp` y of
+    f Nothing x = Just x
+    f (Just x) y = Just $ case x `cmp` y of
         GT -> y
         _ -> x
 
 intoMaximumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
-intoMaximumBy cmp = reducer_ Nothing step id
+intoMaximumBy cmp = intoFold f Nothing
   where
-    step Nothing x = Just x
-    step (Just x) y = Just $ case x `cmp` y of
+    f Nothing x = Just x
+    f (Just x) y = Just $ case x `cmp` y of
         LT -> y
         _ -> x
 
 intoMonoid :: (Monoid m) => Reducer m m
-intoMonoid = reducer_ mempty (<>) id
+intoMonoid = intoFold (<>) mempty
 
 intoFoldMap :: (Monoid m) => (a -> m) -> (m -> b) -> Reducer a b
 intoFoldMap f = reducer_ mempty (\acc x -> acc <> f x)
@@ -196,7 +202,7 @@ intoFold1 f = reducer_ Nothing step (fromMaybe (error "intoFold1: empty structur
     step (Just acc) x = Just $! f acc x
 
 intoFor_ :: (Applicative f) => (a -> f b) -> Reducer a (f ())
-intoFor_ f = reducer_ (pure ()) (\acc x -> acc <* f x) id
+intoFor_ f = intoFold (\acc x -> acc <* f x) (pure ())
 
 -- transducers
 
@@ -229,7 +235,7 @@ taking n (Reducer init step complete) = Reducer init' step' complete'
         | otherwise =
             let Reduced flag r' = step acc x
             in Reduced flag (if flag then n' else n' - 1, r')
-    complete' (_, r) = complete r
+    complete' (_, acc) = complete acc
 {-# INLINE taking #-}
 
 takingWhile :: (a -> Bool) -> Transducer a a
@@ -245,7 +251,7 @@ dropping n (Reducer init step complete) = Reducer init' step' complete'
     step' (n', acc) x
         | n' <= 0 = fmap ((,) n') (step acc x)
         | otherwise = continue (n' - 1, acc)
-    complete' (_, r) = complete r
+    complete' (_, acc) = complete acc
 {-# INLINE dropping #-}
 
 droppingWhile :: (a -> Bool) -> Transducer a a
@@ -255,18 +261,26 @@ droppingWhile pred (Reducer init step complete) = Reducer init' step' complete'
     step' (False, acc) x
         | pred x = continue (False, acc)
     step' (_, acc) x = fmap ((,) True) (step acc x)
-    complete' (_, r) = complete r
+    complete' (_, acc) = complete acc
 {-# INLINE droppingWhile #-}
+
+enumerating :: Transducer a (Int, a)
+enumerating (Reducer init step complete) = Reducer init' step' complete'
+  where
+    init' = (0, init)
+    step' (n, acc) x = fmap ((,) (n + 1)) (step acc (n, x))
+    complete' (_, acc) = complete acc
+{-# INLINE enumerating #-}
 
 postscanning :: Reducer a b -> Transducer a b
 postscanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reducer init' step' complete'
   where
     init' = (init0, init)
     step' (acc0, acc) x =
-        let Reduced flag0 r0' = step0 acc0 x
-            Reduced flag r' = step acc (complete0 r0')
-        in Reduced (flag0 || flag) (r0', r')
-    complete' (_, r) = complete r
+        let Reduced flag0 acc0' = step0 acc0 x
+            Reduced flag acc' = step acc (complete0 acc0')
+        in Reduced (flag0 || flag) (acc0', acc')
+    complete' (_, acc) = complete acc
 {-# INLINE postscanning #-}
 
 prescanning :: Reducer a b -> Transducer a b
@@ -274,8 +288,8 @@ prescanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reduc
   where
     init' = (init0, init)
     step' (acc0, acc) x =
-        let Reduced flag0 r0' = step0 acc0 x
-            Reduced flag r' = step acc (complete0 acc0)
-        in Reduced (flag0 || flag) (r0', r')
-    complete' (_, r) = complete r
+        let Reduced flag0 acc0' = step0 acc0 x
+            Reduced flag acc' = step acc (complete0 acc0)
+        in Reduced (flag0 || flag) (acc0', acc')
+    complete' (_, acc) = complete acc
 {-# INLINE prescanning #-}
