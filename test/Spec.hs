@@ -36,6 +36,10 @@ maximumMaybe :: (Ord a) => [a] -> Maybe a
 maximumMaybe [] = Nothing
 maximumMaybe xs = Just (maximum xs)
 
+foldl'1 :: (a -> a -> a) -> [a] -> Maybe a
+foldl'1 _ [] = Nothing
+foldl'1 f (x : xs) = Just $! foldl' f x xs
+
 main :: IO ()
 main = hspec $ do
     describe "reducers" $ do
@@ -58,7 +62,7 @@ main = hspec $ do
         prop "intoMonoid" $ prop_reducer intoMonoid (mconcat :: [[Int]] -> [Int]) -- use Monoid [Int]
         prop "intoFoldMap" $ prop_reducer (intoFoldMap Sum getSum) (getSum . foldMap Sum) -- use Monoid (Sum Int)
         prop "intoFold" $ prop_reducer (intoFold (+) 0) (foldl' (+) 0)
-        prop "intoFold1" $ \(NonEmpty ls) -> reduce (intoFold1 (+)) ls === foldl1 (+) ls
+        prop "intoFold1" $ prop_reducer (intoFold1 (+)) (foldl'1 (+))
         prop "intoFor_" $ \(Fn (f :: Int -> Maybe Int)) -> prop_reducer (intoFor_ f) (traverse_ f) -- use Applicative Maybe
 
     describe "transducers" $ do

@@ -4,6 +4,40 @@
 {- |
 Transducers are composable algorithmic transformations.
 
+A @'Reducer' a b@ is a description of a strict left fold over elements of type @a@ with
+a completion transformation that produces a value of type @b@ and the possibility
+to early exit (through 'Reduced').
+
+A @'Transducer' a b@ is a function @forall r. Reducer b r -> Reducer a r@. Note that transducer composition is backwards,
+so @f . g@ first applies @f@ and then @g@.
+
+= Usage
+
+There are no name clashes with the "Prelude", so this module can be imported unqualified:
+
+> import Transducers
+
+== Example
+
+>>> transduce (filtering odd . mapping (+ 1)) intoSum [1..5]
+12
+
+== Defining reucers/transducers
+
+Reducers can be defined by using 'Reducer', 'mkReducer_' or one of the predefined combinators.
+Additionally, applying a transducer to a reducer produces a new reducer. For example:
+
+> intoSum = intoFold (+) 0
+> intoAny pred = mapping pred intoOr
+
+Transducers can be defined by directly using one of the combinators,
+by directly implementing a function `Reducer b r -> Reducer a r`, or by composing existing transducers. For example:
+
+> mapping f (Reducer init step complete) = Reducer init (\acc x -> step acc (f x)) complete
+> slicing i len = dropping i . taking len
+
+It is recommended to inline transducers for maximum performance, so that one big fold is generated.
+
 = Naming convention
 
 Reducers are prefixed with "into" (e.g. 'intoSum'), while transducers have an "ing" suffix (e.g. 'mapping').
@@ -16,7 +50,7 @@ Reducers are prefixed with "into" (e.g. 'intoSum'), while transducers have an "i
 
 module Transducers
     ( Reduced(Reduced), continue, reduced, getReduced
-    , Reducer(..), reducer, reducer_
+    , Reducer(..), mkReducer_
     , Transducer
     , reduce, transduce
     -- * Reducers
@@ -45,36 +79,40 @@ module Transducers
     ) where
 
 import Control.Applicative (liftA2)
-import Data.Maybe (fromMaybe)
 import Prelude hiding (init, pred)
 
 -- types
 
-data Reduced a = Reduced { _flag :: !Bool, getReduced :: a }
+-- | A type to indicate wether or not the result of a reduction is already fully reduced.
+data Reduced a = Reduced !Bool a
 
+-- | Extract the inner value.
+getReduced :: Reduced a -> a
+getReduced (Reduced _ x) = x
+
+-- | A 'Reduced' that indicated to continue the reduction.
 continue :: a -> Reduced a
 continue = Reduced False
 
+-- | A 'Reduced' that indicates to early exit the reduction.
 reduced :: a -> Reduced a
 reduced = Reduced True
 
 instance Functor Reduced where
     fmap f (Reduced flag x) = Reduced flag (f x)
 
+-- | A description of a reduction (strict left fold).
 data Reducer a b = forall s. Reducer
-    { _init :: s
-    , _step :: s -> a -> Reduced s
-    , _complete :: s -> b
-    }
+    s -- ^ The initial state.
+    (s -> a -> Reduced s) -- ^ The step function.
+    (s -> b) -- ^ The completion function.
 
--- TODO: rename?
+-- | Make a 'Reducer' from an initial state, a step function and a completion function.
+-- The result of the step function is wrapped with 'continue'.
+mkReducer_ :: s -> (s -> a -> s) -> (s -> b) -> Reducer a b
+mkReducer_ init step = Reducer init (\acc x -> continue (step acc x))
 
-reducer :: s -> (s -> a -> Reduced s) -> (s -> b) -> Reducer a b
-reducer = Reducer
-
-reducer_ :: s -> (s -> a -> s) -> (s -> b) -> Reducer a b
-reducer_ init step = Reducer init (\acc x -> continue (step acc x))
-
+-- | A transducer is a transformation from reducers to reducers.
 type Transducer a b = forall r. Reducer b r -> Reducer a r
 
 instance Functor (Reducer a) where
@@ -101,6 +139,7 @@ instance Applicative (Reducer a) where
 
 -- consumers
 
+-- | Reduce a 'Foldable' with a reducer.
 reduce :: (Foldable t) => Reducer a b -> t a -> b
 reduce (Reducer init step complete) xs = foldr c complete xs init
   where
@@ -108,124 +147,157 @@ reduce (Reducer init step complete) xs = foldr c complete xs init
         let Reduced flag x' = step acc x
         in if flag then complete x' else k $! x'
 
+-- | Reduce a 'Foldable' with a reducer, after applying the transducer.
+--
+-- > transducer transducer reducer = reduce (transducer reducer)
 transduce :: (Foldable t) => Transducer a b -> Reducer b c -> t a -> c
-transduce trans red = reduce (trans red)
+transduce transducer reducer = reduce (transducer reducer)
 
 -- reducers
 
+-- | Returns the number of elements.
 intoLength :: Reducer a Int
 intoLength = intoFold (\x _ -> x + 1) 0
 
+-- | Returns 'True' if there are no elements, `False` otherwise.
 intoNull :: Reducer a Bool
 intoNull = Reducer True (\_ _ -> reduced False) id
 
+-- | @intoElem x@ returns 'True' if @x@ is equal to any of the elements.
 intoElem :: (Eq a) => a -> Reducer a Bool
 intoElem x = intoAny (== x)
 
+-- | Returns a list of all elements.
 intoList :: Reducer a [a]
-intoList = reducer_ id (\acc x -> acc . (x :)) ($ [])
+intoList = mkReducer_ id (\acc x -> acc . (x :)) ($ [])
 
+-- | Returns a list of all elements, in reverse order.
 intoRevList :: Reducer a [a]
 intoRevList = intoFold (flip (:)) []
 
+-- | Returns the sum of all elements.
 intoSum :: (Num a) => Reducer a a
 intoSum = intoFold (+) 0
 
+-- | Returns the product of all elements.
 intoProduct :: (Num a) => Reducer a a
 intoProduct = intoFold (*) 1
 
+-- | Returns the first element or 'Nothing' if there are no elements.
 intoFirst :: Reducer a (Maybe a)
 intoFirst = Reducer Nothing (\_ x -> reduced (Just x)) id
 
+-- | Returns the last element or 'Nothing' if there are no elements.
 intoLast :: Reducer a (Maybe a)
 intoLast = intoFold (const Just) Nothing
 
+-- | Returns 'True' if all elements are 'True', 'False' otherwise.
 intoAnd :: Reducer Bool Bool
 intoAnd = Reducer True (\acc x -> if x then continue acc else reduced x) id
 
+-- | Returns 'True' if any element is 'True', 'False' otherwise.
 intoOr :: Reducer Bool Bool
 intoOr = Reducer False (\acc x -> if x then reduced x else continue acc) id
 
+-- | Returns 'True' if all elements satisfy the predicate, 'False' otherwise.
 intoAll :: (a -> Bool) -> Reducer a Bool
 intoAll pred = mapping pred intoAnd
 
+-- | Returns 'True' if any element satisfies the predicate, 'False' otherwise.
 intoAny :: (a -> Bool) -> Reducer a Bool
 intoAny pred = mapping pred intoOr
 
+-- | Returns the first element satisfying the predicate or 'Nothing' if no element satisfies the predicate.
 intoFind :: (a -> Bool) -> Reducer a (Maybe a)
 intoFind pred = filtering pred intoFirst
 
+-- | Returns the index of the first element satisfying the predicate or 'Nothing' if no element satisfies the predicate.
 intoFindIndex :: (a -> Bool) -> Reducer a (Maybe Int)
 intoFindIndex pred = enumerating . filtering (\(_, x) -> pred x) . mapping fst $ intoFirst
 
+-- | Returns the minimum element or 'Nothing' if there are no elements.
 intoMinimum :: (Ord a) => Reducer a (Maybe a)
-intoMinimum = intoFold f Nothing
+intoMinimum = intoFold step Nothing
   where
-    f Nothing y = Just y
-    f (Just x) y = Just (min x y)
+    step Nothing y = Just y
+    step (Just x) y = Just (min x y)
 
+-- | Returns the maximum element or 'Nothing' if there are no elements.
 intoMaximum :: (Ord a) => Reducer a (Maybe a)
-intoMaximum = intoFold f Nothing
+intoMaximum = intoFold step Nothing
   where
-    f Nothing y = Just y
-    f (Just x) y = Just (max x y)
+    step Nothing y = Just y
+    step (Just x) y = Just (max x y)
 
+-- | Returns the minimum element with respect to the given comparison function or 'Nothing' if there are no elements.
 intoMinimumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
-intoMinimumBy cmp = intoFold f Nothing
+intoMinimumBy cmp = intoFold step Nothing
   where
-    f Nothing x = Just x
-    f (Just x) y = Just $ case x `cmp` y of
+    step Nothing x = Just x
+    step (Just x) y = Just $ case x `cmp` y of
         GT -> y
         _ -> x
 
+-- | Returns the maximum element with respect to the given comparison function or 'Nothing' if there are no elements.
 intoMaximumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
-intoMaximumBy cmp = intoFold f Nothing
+intoMaximumBy cmp = intoFold step Nothing
   where
-    f Nothing x = Just x
-    f (Just x) y = Just $ case x `cmp` y of
+    step Nothing x = Just x
+    step (Just x) y = Just $ case x `cmp` y of
         LT -> y
         _ -> x
 
+-- | Reduces the elements with '<>'. Returns 'mempty' if there are no elements.
 intoMonoid :: (Monoid m) => Reducer m m
 intoMonoid = intoFold (<>) mempty
 
+-- | Map each element to a monoid and reduce them (like 'intoMonoid'). In the end, the extraction function is applied.
+--
+-- >>> import Data.Monoid (Sum(..))
+-- >>> reduce (intoFoldMap Sum getSum) [1, 2, 3]
+-- 6
 intoFoldMap :: (Monoid m) => (a -> m) -> (m -> b) -> Reducer a b
-intoFoldMap f = reducer_ mempty (\acc x -> acc <> f x)
+intoFoldMap f = mkReducer_ mempty (\acc x -> acc <> f x)
 
+-- | Creates a reducer using the fold function and start accumulator.
 intoFold :: (b -> a -> b) -> b -> Reducer a b
-intoFold f z = reducer_ z f id
+intoFold f z = mkReducer_ z f id
 
-intoFold1 :: (a -> a -> a) -> Reducer a a
-intoFold1 f = reducer_ Nothing step (fromMaybe (error "intoFold1: empty structure"))
+-- | Like 'intoFold', but uses the first element as start accumulator. If there are no elements, 'Nothing' is returned.
+intoFold1 :: (a -> a -> a) -> Reducer a (Maybe a)
+intoFold1 f = intoFold step Nothing
   where
     step Nothing x = Just x
     step (Just acc) x = Just $! f acc x
 
+-- | Map each element to an 'Applicative' action and evaluate these actions (from left to right), ignoring the results.
 intoFor_ :: (Applicative f) => (a -> f b) -> Reducer a (f ())
 intoFor_ f = intoFold (\acc x -> acc <* f x) (pure ())
 
 -- transducers
 
--- TODO: simplify transducers using state & possibly use a strict tuple
-
+-- | Apply the function to every element.
 mapping :: (a -> b) -> Transducer a b
 mapping f (Reducer init step complete) = Reducer init step' complete
   where
     step' acc x = step acc (f x)
 {-# INLINE mapping #-}
 
+-- | Only keep the elements that satisfy the predicate.
 filtering :: (a -> Bool) -> Transducer a a
 filtering pred (Reducer init step complete) = Reducer init step' complete
   where
     step' acc x = if pred x then step acc x else continue acc
 {-# INLINE filtering #-}
 
+-- | Apply the function to every element and flatten the result.
 concatMapping :: (Foldable t) => (a -> t b) -> Transducer a b
 concatMapping f (Reducer init step complete) = Reducer init step' complete
   where
     step' acc x = continue $ reduce (Reducer acc step id) (f x)
 {-# INLINE concatMapping #-}
 
+-- | Take the first @n@ elements.
 taking :: Int -> Transducer a a
 taking n (Reducer init step complete) = Reducer init' step' complete'
   where
@@ -238,12 +310,14 @@ taking n (Reducer init step complete) = Reducer init' step' complete'
     complete' (_, acc) = complete acc
 {-# INLINE taking #-}
 
+-- | Take elements while the predicate is satisifed.
 takingWhile :: (a -> Bool) -> Transducer a a
 takingWhile pred (Reducer init step complete) = Reducer init step' complete
   where
     step' acc x = if pred x then step acc x else reduced acc
 {-# INLINE takingWhile #-}
 
+-- | Drop the first @n@ elements.
 dropping :: Int -> Transducer a a
 dropping n (Reducer init step complete) = Reducer init' step' complete'
   where
@@ -254,6 +328,7 @@ dropping n (Reducer init step complete) = Reducer init' step' complete'
     complete' (_, acc) = complete acc
 {-# INLINE dropping #-}
 
+-- | Drop elements while the predicate is satisified.
 droppingWhile :: (a -> Bool) -> Transducer a a
 droppingWhile pred (Reducer init step complete) = Reducer init' step' complete'
   where
@@ -264,6 +339,7 @@ droppingWhile pred (Reducer init step complete) = Reducer init' step' complete'
     complete' (_, acc) = complete acc
 {-# INLINE droppingWhile #-}
 
+-- | Associate each element with its index.
 enumerating :: Transducer a (Int, a)
 enumerating (Reducer init step complete) = Reducer init' step' complete'
   where
@@ -272,6 +348,7 @@ enumerating (Reducer init step complete) = Reducer init' step' complete'
     complete' (_, acc) = complete acc
 {-# INLINE enumerating #-}
 
+-- | Yield the current result after each reducer step.
 postscanning :: Reducer a b -> Transducer a b
 postscanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reducer init' step' complete'
   where
@@ -283,6 +360,7 @@ postscanning (Reducer init0 step0 complete0) (Reducer init step complete) = Redu
     complete' (_, acc) = complete acc
 {-# INLINE postscanning #-}
 
+-- | Yield the current result before each reducer step.
 prescanning :: Reducer a b -> Transducer a b
 prescanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reducer init' step' complete'
   where
