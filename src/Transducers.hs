@@ -22,6 +22,13 @@ There are no name clashes with the "Prelude", so this module can be imported unq
 >>> transduce (filtering odd . mapping (+ 1)) intoSum [1..5]
 12
 
+The 'Applicative' instance of @'Reducer' a@ can be used to combine reducers.
+The combined reducer will traverse the input only once.
+
+>>> intoAverage = (/) <$> intoSum <*> fmap fromIntegral intoLength
+>>> reduce intoAverage [1..10]
+5.5
+
 == Defining reucers/transducers
 
 Reducers can be defined by using 'Reducer', 'mkReducer_' or one of the predefined combinators.
@@ -30,13 +37,15 @@ Additionally, applying a transducer to a reducer produces a new reducer. For exa
 > intoSum = intoFold (+) 0
 > intoAny pred = mapping pred intoOr
 
-Transducers can be defined by directly using one of the combinators,
-by directly implementing a function `Reducer b r -> Reducer a r`, or by composing existing transducers. For example:
+Transducers can be defined by using one of the combinators, by manually writing a function
+`Reducer b r -> Reducer a r`, or by composing existing transducers. For example:
 
 > mapping f (Reducer init step complete) = Reducer init (\acc x -> step acc (f x)) complete
 > slicing i len = dropping i . taking len
 
-It is recommended to inline transducers for maximum performance, so that one big fold is generated.
+It is recommended to mark transducers with the
+[@INLINE@ pragma](https://downloads.haskell.org/ghc/latest/docs/html/users_guide/exts/pragmas.html#pragma-INLINE)
+for performance.
 
 = Naming convention
 
@@ -84,7 +93,7 @@ import Prelude hiding (init, pred)
 -- types
 
 -- | A type to indicate wether or not the result of a reduction is already fully reduced.
-data Reduced a = Reduced !Bool a
+data Reduced a = Reduced !Bool a -- Note: Using a 'Bool' flag is more efficient than @data Reduced a = Continue a | Reduced a@
 
 -- | Extract the inner value.
 getReduced :: Reduced a -> a
@@ -136,8 +145,6 @@ instance Applicative (Reducer a) where
                     r'@(Reduced flagR' _) = stepR xR x
                 in Reduced (flagL' && flagR') (l', r')
         complete (l, r) = f (completeL (getReduced l)) (completeR (getReduced r))
-
--- consumers
 
 -- | Reduce a 'Foldable' with a reducer.
 reduce :: (Foldable t) => Reducer a b -> t a -> b
