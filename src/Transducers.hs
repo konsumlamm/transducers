@@ -227,21 +227,21 @@ intoMinimum :: (Ord a) => Reducer a (Maybe a)
 intoMinimum = intoFold step Nothing
   where
     step Nothing y = Just y
-    step (Just x) y = Just (min x y)
+    step (Just x) y = Just $! min x y
 
 -- | Returns the maximum element or 'Nothing' if there are no elements.
 intoMaximum :: (Ord a) => Reducer a (Maybe a)
 intoMaximum = intoFold step Nothing
   where
     step Nothing y = Just y
-    step (Just x) y = Just (max x y)
+    step (Just x) y = Just $! max x y
 
 -- | Returns the minimum element with respect to the given comparison function or 'Nothing' if there are no elements.
 intoMinimumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
 intoMinimumBy cmp = intoFold step Nothing
   where
     step Nothing x = Just x
-    step (Just x) y = Just $ case x `cmp` y of
+    step (Just x) y = Just $! case x `cmp` y of
         GT -> y
         _ -> x
 
@@ -250,7 +250,7 @@ intoMaximumBy :: (a -> a -> Ordering) -> Reducer a (Maybe a)
 intoMaximumBy cmp = intoFold step Nothing
   where
     step Nothing x = Just x
-    step (Just x) y = Just $ case x `cmp` y of
+    step (Just x) y = Just $! case x `cmp` y of
         LT -> y
         _ -> x
 
