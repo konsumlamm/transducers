@@ -1,5 +1,7 @@
 {-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 
 {- |
 Transducers are composable algorithmic transformations.
@@ -8,7 +10,7 @@ A @'Reducer' a b@ is a description of a strict left fold over elements of type @
 a completion transformation that produces a value of type @b@ and the possibility
 to early exit (through 'Reduced').
 
-A @'Transducer' a b@ is a function @forall r. Reducer b r -> Reducer a r@. Note that transducer composition is backwards,
+A @'Transducer' a b@ is a function @forall r. Reducer b r -> Reducer a r@. Note that transducer composition is "backwards",
 so @f . g@ first applies @f@ and then @g@.
 
 = Usage
@@ -16,6 +18,8 @@ so @f . g@ first applies @f@ and then @g@.
 There are no name clashes with the "Prelude", so this module can be imported unqualified:
 
 > import Transducers
+
+The main functions are 'reduce' and 'transduce'.
 
 == Example
 
@@ -61,7 +65,7 @@ module Transducers
     ( Reduced(Reduced), continue, reduced, getReduced
     , Reducer(..), mkReducer_
     , Transducer
-    , reduce, transduce
+    , Reducible(..), transduce
     -- * Reducers
     , intoList, intoRevList
     , intoLength
@@ -146,18 +150,25 @@ instance Applicative (Reducer a) where
                 in Reduced (flagL' && flagR') (l', r')
         complete (l, r) = f (completeL (getReduced l)) (completeR (getReduced r))
 
--- | Reduce a 'Foldable' with a reducer.
-reduce :: (Foldable t) => Reducer a b -> t a -> b
-reduce (Reducer init step complete) xs = foldr c complete xs init
-  where
-    c x k acc =
-        let Reduced flag x' = step acc x
-        in if flag then complete x' else k $! x'
+class Reducible t where
+    type Item t
 
--- | Reduce a 'Foldable' with a reducer, after applying the transducer.
+    -- | Reduce a 'Reducible' with a reducer.
+    reduce :: Reducer (Item t) b -> t -> b
+
+instance (Foldable f) => Reducible (f a) where
+    type Item (f a) = a
+
+    reduce (Reducer init step complete) xs = foldr c complete xs init
+      where
+        c x k acc =
+            let Reduced flag x' = step acc x
+            in if flag then complete x' else k $! x'
+
+-- | Reduce a 'Reducible' with a reducer, after applying the transducer.
 --
 -- > transducer transducer reducer = reduce (transducer reducer)
-transduce :: (Foldable t) => Transducer a b -> Reducer b c -> t a -> c
+transduce :: (Reducible f) => Transducer (Item f) b -> Reducer b c -> f -> c
 transduce transducer reducer = reduce (transducer reducer)
 
 -- reducers
@@ -298,7 +309,7 @@ filtering pred (Reducer init step complete) = Reducer init step' complete
 {-# INLINE filtering #-}
 
 -- | Apply the function to every element and flatten the result.
-concatMapping :: (Foldable t) => (a -> t b) -> Transducer a b
+concatMapping :: (Reducible f) => (a -> f) -> Transducer a (Item f)
 concatMapping f (Reducer init step complete) = Reducer init step' complete
   where
     step' acc x = continue $ reduce (Reducer acc step id) (f x)
