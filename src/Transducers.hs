@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
@@ -138,6 +139,7 @@ instance Applicative (Reducer a) where
       where
         init = (continue initL, continue initR)
         step (l@(Reduced flagL xL), r@(Reduced flagR xR)) x
+            -- at least one of `flagL` and `flagR` is `False` (otherwise, `step` wouldn't have been called)
             | flagL =
                 let r'@(Reduced flagR' _) = stepR xR x
                 in Reduced flagR' (l, r')
@@ -148,7 +150,8 @@ instance Applicative (Reducer a) where
                 let l'@(Reduced flagL' _) = stepL xL x
                     r'@(Reduced flagR' _) = stepR xR x
                 in Reduced (flagL' && flagR') (l', r')
-        complete (l, r) = f (completeL (getReduced l)) (completeR (getReduced r))
+        complete (Reduced _ xL, Reduced _ xR) = f (completeL xL) (completeR xR)
+
 
 class Reducible t where
     type Item t
@@ -294,6 +297,8 @@ intoFor_ f = intoFold (\acc x -> acc <* f x) (pure ())
 
 -- transducers
 
+data WithInt a = WithInt {-# UNPACK #-} !Int a
+
 -- | Apply the function to every element.
 mapping :: (a -> b) -> Transducer a b
 mapping f (Reducer init step complete) = Reducer init step' complete
@@ -319,13 +324,13 @@ concatMapping f (Reducer init step complete) = Reducer init step' complete
 taking :: Int -> Transducer a a
 taking n (Reducer init step complete) = Reducer init' step' complete'
   where
-    init' = (n, init)
-    step' (n', acc) x
-        | n' <= 0 = reduced (n', acc)
+    init' = WithInt n init
+    step' (WithInt n' acc) x
+        | n' <= 0 = reduced (WithInt n' acc)
         | otherwise =
             let Reduced flag r' = step acc x
-            in Reduced flag (if flag then n' else n' - 1, r')
-    complete' (_, acc) = complete acc
+            in Reduced flag (WithInt (if flag then n' else n' - 1) r')
+    complete' (WithInt _ acc) = complete acc
 {-# INLINE taking #-}
 
 -- | Take elements while the predicate is satisifed.
@@ -339,11 +344,11 @@ takingWhile pred (Reducer init step complete) = Reducer init step' complete
 dropping :: Int -> Transducer a a
 dropping n (Reducer init step complete) = Reducer init' step' complete'
   where
-    init' = (n, init)
-    step' (n', acc) x
-        | n' <= 0 = fmap ((,) n') (step acc x)
-        | otherwise = continue (n' - 1, acc)
-    complete' (_, acc) = complete acc
+    init' = WithInt n init
+    step' (WithInt n' acc) x
+        | n' <= 0 = fmap (WithInt n') (step acc x)
+        | otherwise = continue (WithInt (n' - 1) acc)
+    complete' (WithInt _ acc) = complete acc
 {-# INLINE dropping #-}
 
 -- | Drop elements while the predicate is satisified.
@@ -361,9 +366,9 @@ droppingWhile pred (Reducer init step complete) = Reducer init' step' complete'
 enumerating :: Transducer a (Int, a)
 enumerating (Reducer init step complete) = Reducer init' step' complete'
   where
-    init' = (0, init)
-    step' (n, acc) x = fmap ((,) (n + 1)) (step acc (n, x))
-    complete' (_, acc) = complete acc
+    init' = WithInt 0 init
+    step' (WithInt i acc) x = fmap (WithInt (i + 1)) (step acc (i, x))
+    complete' (WithInt _ acc) = complete acc
 {-# INLINE enumerating #-}
 
 -- | Yield the current result after each reducer step.
@@ -372,8 +377,8 @@ postscanning (Reducer init0 step0 complete0) (Reducer init step complete) = Redu
   where
     init' = (init0, init)
     step' (acc0, acc) x =
-        let Reduced flag0 acc0' = step0 acc0 x
-            Reduced flag acc' = step acc (complete0 acc0')
+        let !(Reduced flag0 acc0') = step0 acc0 x
+            !(Reduced flag acc') = step acc (complete0 acc0')
         in Reduced (flag0 || flag) (acc0', acc')
     complete' (_, acc) = complete acc
 {-# INLINE postscanning #-}
@@ -384,8 +389,8 @@ prescanning (Reducer init0 step0 complete0) (Reducer init step complete) = Reduc
   where
     init' = (init0, init)
     step' (acc0, acc) x =
-        let Reduced flag0 acc0' = step0 acc0 x
-            Reduced flag acc' = step acc (complete0 acc0)
+        let !(Reduced flag0 acc0') = step0 acc0 x
+            !(Reduced flag acc') = step acc (complete0 acc0)
         in Reduced (flag0 || flag) (acc0', acc')
     complete' (_, acc) = complete acc
 {-# INLINE prescanning #-}
