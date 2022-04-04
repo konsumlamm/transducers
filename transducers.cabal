@@ -23,7 +23,7 @@ library
   hs-source-dirs:      src
   exposed-modules:
     Transducers
-  build-depends:       base >= 4.11 && < 5
+  build-depends:       base >= 4.11 && < 5, text
   ghc-options:         -Wall -O2
   default-language:    Haskell2010
 

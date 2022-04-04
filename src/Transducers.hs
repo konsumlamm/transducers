@@ -95,6 +95,8 @@ module Transducers
 import Control.Applicative (liftA2)
 import Prelude hiding (init, pred)
 
+import qualified Data.Text as Text
+
 -- types
 
 -- | A type to indicate wether or not the result of a reduction is already fully reduced.
@@ -163,6 +165,15 @@ instance (Foldable f) => Reducible (f a) where
     type Item (f a) = a
 
     reduce (Reducer init step complete) xs = foldr c complete xs init
+      where
+        c x k acc =
+            let Reduced flag x' = step acc x
+            in if flag then complete x' else k $! x'
+
+instance Reducible Text.Text where
+    type Item Text.Text = Char
+
+    reduce (Reducer init step complete) t = Text.foldr c complete t init
       where
         c x k acc =
             let Reduced flag x' = step acc x
